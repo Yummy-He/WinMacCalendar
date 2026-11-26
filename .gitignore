@@ -1,0 +1,9 @@
+.dotnet/
+.dotnet-sdk.zip
+.nuget/
+.cli/
+bin/
+obj/
+publish/
+.verify/
+*.user
