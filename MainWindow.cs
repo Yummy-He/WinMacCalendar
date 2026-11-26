@@ -1,5 +1,9 @@
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +13,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 
 namespace WinMacCalendar;
@@ -43,6 +48,8 @@ public sealed class MainWindow : Window
     private DateTime cacheFrom, cacheTo;
     private List<Entry> entries = [];
     private string syncText = "等待同步";
+    private string syncDetail = "";
+    private int recoveryScheduled;
     private readonly Dictionary<string, int> readErrors = new();
     private readonly HashSet<string> hidden;
 
@@ -156,6 +163,8 @@ public sealed class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
+            SystemEvents.SessionSwitch += OnSessionSwitch;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
             EnsureExtraWindowsShown();
             timer.Start();
             await Sync();
@@ -165,6 +174,8 @@ public sealed class MainWindow : Window
         Closed += (_, _) =>
         {
             isClosing = true;
+            SystemEvents.SessionSwitch -= OnSessionSwitch;
+            NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
             timer.Stop();
             closing.Cancel();
             CloseTrayMenuHost();
@@ -428,7 +439,8 @@ public sealed class MainWindow : Window
                     });
                 extraWindows[cfg.Id] = win;
                 RenderWidget(cfg, win, DateTime.Now);
-                ApplyGeometry(cfg, win, saveAfter: true);
+                bool needsInitialSave = !double.IsFinite(cfg.Left) || !double.IsFinite(cfg.Top);
+                ApplyGeometry(cfg, win, saveAfter: needsInitialSave);
                 if (IsVisible) win.Show();
                 Desktop.Lower(win);
             }
@@ -715,6 +727,24 @@ public sealed class MainWindow : Window
         return m;
     }
 
+    internal static MenuItem StatusMenuItem(string summary, string detail = "")
+    {
+        var text = new TextBlock
+        {
+            Text = summary,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 220,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var item = new MenuItem { Header = text, IsEnabled = false };
+        if (!string.IsNullOrWhiteSpace(detail))
+        {
+            ToolTipService.SetShowOnDisabled(item, true);
+            item.ToolTip = detail;
+        }
+        return item;
+    }
+
     private void CloseTrayMenuHost()
     {
         if (trayMenuHost == null) return;
@@ -768,7 +798,7 @@ public sealed class MainWindow : Window
         {
             menu.Items.Add(new Separator());
             menu.Items.Add(Item("立即同步", async () => await Sync()));
-            menu.Items.Add(new MenuItem { Header = syncText, IsEnabled = false });
+            menu.Items.Add(StatusMenuItem(syncText, syncDetail));
         }
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("退出桌面日历", Close));
@@ -812,7 +842,7 @@ public sealed class MainWindow : Window
         foreach (var source in Sources)
         {
             var entry = Item(source.Name + (source.Writable ? "" : "（只读）"), () => ToggleSource(source), !hidden.Contains(source.Scope));
-            entry.Header = Dialogs.SourceLabel(source.Name + (source.Writable ? "" : "（只读）"), source.Accent, night);
+            entry.Header = Dialogs.SourceLabel(source.Name + (source.Writable ? "" : "（只读）"), source.Accent, night, maxTextWidth: 200);
             sources.Items.Add(entry);
         }
         menu.Items.Add(sources);
@@ -820,7 +850,7 @@ public sealed class MainWindow : Window
         if (account != null)
         {
             menu.Items.Add(Item("立即同步", async () => await Sync()));
-            menu.Items.Add(new MenuItem { Header = syncText, IsEnabled = false });
+            menu.Items.Add(StatusMenuItem(syncText, syncDetail));
         }
 
         menu.Items.Add(Item("设置与布局…", OpenSettings));
@@ -921,6 +951,7 @@ public sealed class MainWindow : Window
             },
             GetAccount = () => account,
             GetSyncText = () => syncText,
+            GetSyncDetail = () => syncDetail,
             GetReadErrors = () => readErrors,
             GetSources = () => Sources.Select(s => (s, !hidden.Contains(s.Scope))),
             SetSourceVisible = (s, visible) =>
@@ -1066,6 +1097,7 @@ public sealed class MainWindow : Window
         foreach (var c in account.Calendars) hidden.Remove(account.ScopeFor(c));
         SaveFilter();
         syncText = "等待同步";
+        syncDetail = "";
         lastAttempt = DateTime.MinValue;
         nextMetadataRefresh = DateTime.UtcNow.AddHours(1);
         _ = Sync();
@@ -1082,6 +1114,8 @@ public sealed class MainWindow : Window
         }
         activeSync?.Cancel();
         account = null;
+        syncText = "等待同步";
+        syncDetail = "";
         store.Set("account", "");
         hidden.Remove(CalendarStore.Local);
         SaveFilter();
@@ -1160,6 +1194,97 @@ public sealed class MainWindow : Window
         await Sync();
     }
 
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        if (isClosing || e.Reason is not (SessionSwitchReason.SessionUnlock or SessionSwitchReason.SessionLogon)) return;
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (isClosing) return;
+            LowerAll();
+            if (account != null && (syncText.StartsWith("同步失败") || DateTime.Now - lastAttempt >= TimeSpan.FromSeconds(10)))
+                TriggerDelayedRecoverySync();
+        });
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        if (isClosing || !e.IsAvailable) return;
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (isClosing || account == null) return;
+            if (syncText.StartsWith("同步失败") || syncText == "等待同步")
+                TriggerDelayedRecoverySync();
+        });
+    }
+
+    private void TriggerDelayedRecoverySync()
+    {
+        if (Interlocked.CompareExchange(ref recoveryScheduled, 1, 0) != 0) return;
+        _ = RunRecoverySyncAsync();
+    }
+
+    private async Task RunRecoverySyncAsync()
+    {
+        try
+        {
+            await Task.Delay(1500, closing.Token);
+            if (!isClosing && account != null) await Sync();
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            Interlocked.Exchange(ref recoveryScheduled, 0);
+        }
+    }
+
+    internal static string SummarizeSyncError(Exception ex)
+    {
+        if (ex is TaskCanceledException or TimeoutException) return "连接超时";
+        if (ex is HttpRequestException hre)
+        {
+            if (hre.StatusCode == HttpStatusCode.Unauthorized) return "账户验证失败（401）";
+            if (hre.StatusCode == HttpStatusCode.Forbidden) return "无访问权限（403）";
+            if (hre.StatusCode is { } code) return $"服务器错误（{(int)code}）";
+            if (hre.HttpRequestError is HttpRequestError.NameResolutionError
+                or HttpRequestError.ConnectionError
+                or HttpRequestError.SecureConnectionError
+                or HttpRequestError.ProxyTunnelError)
+                return "网络暂不可用";
+        }
+        if (ex.GetBaseException() is SocketException) return "网络暂不可用";
+
+        string raw = NormalizeSingleLine(ex.Message);
+        if (string.IsNullOrEmpty(raw)) return "未知错误";
+        return raw.Length > 20 ? raw[..20] + "…" : raw;
+    }
+
+    internal static (string Summary, string Detail) FormatSyncFailure(IReadOnlyList<(string Target, Exception Error)> failures)
+    {
+        if (failures.Count == 0) return ("同步失败", "");
+
+        var reasons = failures.Select(f => SummarizeSyncError(f.Error)).Distinct().ToList();
+        string summary = reasons.Count == 1
+            ? $"同步失败 · {reasons[0]}"
+            : $"同步失败 · {reasons[0]} 等 {reasons.Count} 项";
+        if (summary.Length > 28) summary = summary[..27] + "…";
+
+        var lines = failures
+            .Select(f => $"{f.Target}：{NormalizeSingleLine(f.Error.Message)}")
+            .Distinct()
+            .ToList();
+        string detail = reasons.Count == 1 && failures.Count > 1
+            ? $"{reasons[0]}（共 {failures.Count} 项失败）\n" + string.Join("\n", lines.Take(6))
+            : string.Join("\n", lines.Take(6));
+        if (lines.Count > 6) detail += $"\n…另有 {lines.Count - 6} 项";
+        return (summary, detail);
+    }
+
+    private static string NormalizeSingleLine(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        return string.Join(" ", text.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+    }
+
     private async Task Sync()
     {
         var active = account;
@@ -1172,14 +1297,14 @@ public sealed class MainWindow : Window
         try
         {
             using var cloud = new ICloud(active.Email, active.Password());
-            var errors = new List<string>();
+            var failures = new List<(string Target, Exception Error)>();
             if (DateTime.UtcNow >= nextMetadataRefresh)
             {
-                nextMetadataRefresh = DateTime.UtcNow.AddHours(1);
                 try
                 {
                     var discovered = await cloud.Discover(request.Token);
                     request.Token.ThrowIfCancellationRequested();
+                    nextMetadataRefresh = DateTime.UtcNow.AddHours(1);
                     var refreshed = active.Calendars.Select(old => discovered.FirstOrDefault(c => c.Url == old.Url) ?? old).ToList();
                     if (account == active && !refreshed.SequenceEqual(active.Calendars))
                     {
@@ -1191,23 +1316,31 @@ public sealed class MainWindow : Window
                 }
                 catch (Exception ex) when (!request.IsCancellationRequested)
                 {
-                    errors.Add("日历名称与颜色 · " + ex.Message);
+                    failures.Add(("日历名称与颜色", ex));
                 }
             }
             foreach (var calendar in active.Calendars)
             {
                 request.Token.ThrowIfCancellationRequested();
                 try { await cloud.Sync(store, active, calendar, request.Token); }
-                catch (Exception ex) when (!request.IsCancellationRequested) { errors.Add(calendar.Name + " · " + ex.Message); }
+                catch (Exception ex) when (!request.IsCancellationRequested) { failures.Add((calendar.Name, ex)); }
             }
             if (active == account)
-                syncText = errors.Count == 0
-                    ? "上次同步 " + DateTime.Now.ToString("HH:mm")
-                    : "同步失败 · " + string.Join("；", errors);
+            {
+                if (failures.Count == 0)
+                {
+                    syncText = "上次同步 " + DateTime.Now.ToString("HH:mm");
+                    syncDetail = "";
+                }
+                else
+                {
+                    (syncText, syncDetail) = FormatSyncFailure(failures);
+                }
+            }
         }
         catch (Exception ex)
         {
-            if (active == account) syncText = "同步失败 · " + ex.Message;
+            if (active == account) (syncText, syncDetail) = FormatSyncFailure([("iCloud 账户", ex)]);
         }
         finally
         {

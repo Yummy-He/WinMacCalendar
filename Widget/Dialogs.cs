@@ -162,7 +162,7 @@ internal static class Dialogs
         return t;
     }
 
-    internal static StackPanel SourceLabel(string text, string accent, bool dark = false)
+    internal static StackPanel SourceLabel(string text, string accent, bool dark = false, double maxTextWidth = double.PositiveInfinity)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         row.Children.Add(new Ellipse
@@ -173,7 +173,14 @@ internal static class Dialogs
             Margin = new Thickness(0, 0, 7, 0),
             VerticalAlignment = VerticalAlignment.Center
         });
-        row.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
+        var label = new TextBlock
+        {
+            Text = text,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        if (double.IsFinite(maxTextWidth)) label.MaxWidth = maxTextWidth;
+        row.Children.Add(label);
         return row;
     }
 

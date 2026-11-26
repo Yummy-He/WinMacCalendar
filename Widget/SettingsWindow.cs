@@ -38,6 +38,7 @@ internal sealed class SettingsHost
     public required Action<double> SetOpacity { get; init; }
     public required Func<Account?> GetAccount { get; init; }
     public required Func<string> GetSyncText { get; init; }
+    public Func<string>? GetSyncDetail { get; init; }
     public required Func<IReadOnlyDictionary<string, int>> GetReadErrors { get; init; }
     public required Func<IEnumerable<(CalendarSource Source, bool Visible)>> GetSources { get; init; }
     public required Action<CalendarSource, bool> SetSourceVisible { get; init; }
@@ -962,18 +963,25 @@ internal sealed class SettingsWindow : Window
         }
         else
         {
+            var syncText = host.GetSyncText();
+            var syncDetail = host.GetSyncDetail?.Invoke() ?? "";
             var top = new DockPanel();
             var statusDot = new Ellipse
             {
                 Width = 8,
                 Height = 8,
-                Fill = host.GetSyncText().StartsWith("同步失败") ? Palette.Color("#FF3B30") : Palette.Color("#34C759"),
+                Fill = syncText.StartsWith("同步失败") ? Palette.Color("#FF3B30") : Palette.Color("#34C759"),
                 Margin = new Thickness(0, 0, 7, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
+            var statusLabel = MakeText(syncText, 12, "FgMutedBrush");
+            statusLabel.TextWrapping = TextWrapping.NoWrap;
+            statusLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+            statusLabel.MaxWidth = 220;
+            if (!string.IsNullOrWhiteSpace(syncDetail)) statusLabel.ToolTip = syncDetail;
             var statusRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             statusRow.Children.Add(statusDot);
-            statusRow.Children.Add(MakeText(host.GetSyncText(), 12, "FgMutedBrush"));
+            statusRow.Children.Add(statusLabel);
             DockPanel.SetDock(statusRow, Dock.Right);
             top.Children.Add(statusRow);
 
@@ -1007,6 +1015,14 @@ internal sealed class SettingsWindow : Window
             btns.Children.Add(manageBtn);
             btns.Children.Add(disconnectBtn);
             accStack.Children.Add(btns);
+
+            if (!string.IsNullOrWhiteSpace(syncDetail))
+            {
+                var syncErrBanner = new Border { CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 7, 10, 7), Margin = new Thickness(0, 12, 0, 0) };
+                syncErrBanner.SetResourceReference(Border.BackgroundProperty, "DangerBgBrush");
+                syncErrBanner.Child = MakeText(syncDetail, 12, "DangerBrush");
+                accStack.Children.Add(syncErrBanner);
+            }
 
             var readErrors = host.GetReadErrors();
             if (readErrors.Count > 0)

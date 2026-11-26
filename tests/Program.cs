@@ -70,7 +70,39 @@ internal static partial class Program
         CheckMonthLayouts();
         CheckTimelineLayers(null);
         CheckSummaryAndCourseScenario(args.ElementAtOrDefault(3));
-        Console.WriteLine("通过：农历、日期边界、日程编辑、重复日程、SQLite、CalDAV 同步、七种 WPF 视图、月历交互及双栏摘要智能排布。");
+        CheckSyncErrorAndMenuBounds();
+        Console.WriteLine("通过：农历、日期边界、日程编辑、重复日程、SQLite、CalDAV 同步、七种 WPF 视图、月历交互、双栏摘要智能排布及右键菜单宽度边界。");
+    }
+
+    private static void CheckSyncErrorAndMenuBounds()
+    {
+        var dnsErr = new HttpRequestException(HttpRequestError.NameResolutionError, "不知道这样的主机。 (caldav.icloud.com:443)");
+        var (netSummary, netDetail) = MainWindow.FormatSyncFailure([
+            ("日历名称与颜色", dnsErr),
+            ("家庭", dnsErr),
+            ("工作", dnsErr),
+            ("个人", dnsErr),
+            ("节假日", dnsErr)
+        ]);
+        Check(netSummary == "同步失败 · 网络暂不可用", "多日历同类网络报错应去重精简：" + netSummary);
+        Check(netDetail.Contains("共 5 项失败"), "详情应保留失败项统计：" + netDetail);
+
+        var authErr = new HttpRequestException("Unauthorized", null, HttpStatusCode.Unauthorized);
+        var longErr = new InvalidOperationException(new string('错', 300));
+        var (mixedSummary, mixedDetail) = MainWindow.FormatSyncFailure([
+            ("工作", authErr),
+            ("个人", longErr)
+        ]);
+        Check(mixedSummary.Length <= 28 && mixedSummary.Contains("账户验证失败"), "混合报错摘要应精简：" + mixedSummary);
+        Check(mixedDetail.Contains("工作：") && mixedDetail.Contains("个人："), "混合报错详情应包含各日历");
+
+        // Verify ContextMenu and StatusMenuItem never stretch to full screen width even with huge text.
+        var menu = new ContextMenu();
+        ThemeResources.Apply(menu, false);
+        menu.Items.Add(MainWindow.StatusMenuItem(new string('错', 400), mixedDetail));
+        menu.Items.Add(new MenuItem { Header = new string('A', 400), IsEnabled = false });
+        menu.Measure(new Size(4000, 2000));
+        Check(menu.DesiredSize.Width <= 285, $"右键菜单宽度应受控于 285px 以内，实际 {menu.DesiredSize.Width:F1}");
     }
     private static void CheckCache(string path)
     {

@@ -547,6 +547,7 @@
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="HasDropShadow" Value="True"/>
         <Setter Property="Padding" Value="4"/>
+        <Setter Property="MaxWidth" Value="280"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
@@ -583,6 +584,7 @@
         <Setter Property="Foreground" Value="{DynamicResource FgPrimaryBrush}"/>
         <Setter Property="FontSize" Value="13"/>
         <Setter Property="MinWidth" Value="168"/>
+        <Setter Property="MaxWidth" Value="268"/>
         <Setter Property="Padding" Value="8,6"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
@@ -636,7 +638,8 @@
                                     BorderThickness="1"
                                     CornerRadius="12"
                                     Padding="5"
-                                    Margin="6">
+                                    Margin="6"
+                                    MaxWidth="280">
                                 <Border.Effect>
                                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.22" Direction="270"/>
                                 </Border.Effect>
