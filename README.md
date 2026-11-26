@@ -1,4 +1,4 @@
-# WinMacCalendar (v1.0.0)
+# WinMacCalendar (v1.0.2)
 
 macOS / iPadOS 风格的 Windows 桌面日历小组件，采用 WPF + .NET 9 轻量原生方案构建，通过 CalDAV 协议直连 Apple iCloud 实现双向增量同步。
 
@@ -36,6 +36,35 @@ macOS / iPadOS 风格的 Windows 桌面日历小组件，采用 WPF + .NET 9 轻
 
 ---
 
+## 连接 Apple iCloud 日历（获取 App 专用密码）
+
+由于 Apple 安全策略，第三方 CalDAV 客户端**不能直接使用 Apple 账户主密码**，需先在 Apple 官网生成一个「App 专用密码」（不会影响原账户密码，且随时可单独撤销）。
+
+### 1. 前提条件
+- 你的 Apple 账户已开启 **双重认证**（绝大多数账户默认已开启）。
+- 在 iPhone / iPad / Mac 的「设置 → Apple 账户 → iCloud」中已开启 **日历** 同步。
+
+### 2. 生成 App 专用密码
+1. 浏览器访问 Apple 账户管理页：https://account.apple.com 并登录你的 Apple 账户（登录时需在受信任设备上点击「允许」并输入 6 位验证码）。
+2. 进入 **「登录与安全」**（Sign-In and Security）。
+3. 点击 **「App 专用密码」**（App-Specific Passwords），再点击 **「生成 App 专用密码」**（或页面中的 `+` 按钮）。
+4. 输入便于识别的名称（例如 `WinMacCalendar`），点击 **「创建」**，按提示再次验证 Apple 账户密码。
+5. 页面会显示一串 `xxxx-xxxx-xxxx-xxxx` 格式的 16 位专用密码，**立即复制保存**（弹窗关闭后无法再次查看；如忘记，随时可在同一页面撤销并重新生成）。
+
+### 3. 在 WinMacCalendar 中连接
+1. 右键桌面小组件（或双击系统托盘图标）打开 **「设置与布局」**。
+2. 切换到左侧 **「iCloud 与日历」**，点击 **「连接 iCloud 账户…」**。
+3. 填写信息：
+   - **Apple 账户邮箱**：输入你的 Apple 账户邮箱（支持主邮箱或 `@icloud.com` 邮箱）。
+   - **App 专用密码**：粘贴刚才生成的 `xxxx-xxxx-xxxx-xxxx` 专用密码。
+4. 点击 **「验证账户」**，等待拉取云端日历列表后，勾选需要同步的日历并点击 **「保存选择」** 即可。
+
+> **安全与常见提示**
+> - 若验证时提示 `401 Unauthorized`，通常是误填了 Apple 账户主密码、专用密码复制不完整或未开启双重认证。
+> - App 专用密码仅在本机通过 Windows DPAPI（绑定当前 Windows 用户）加密存储，仅直接与 Apple 官方 CalDAV 服务器通信（自动支持国际区 `icloud.com` 与国区 `icloud.com.cn` 重定向）。
+
+---
+
 ## 技术栈与架构
 
 | 层 | 技术 |
@@ -51,7 +80,7 @@ macOS / iPadOS 风格的 Windows 桌面日历小组件，采用 WPF + .NET 9 轻
 
 ```text
 WinMacCalendar/
-├── WinMacCalendar.csproj        — 项目配置 (.NET 9 WPF, v1.0.0)
+├── WinMacCalendar.csproj        — 项目配置 (.NET 9 WPF, v1.0.2)
 ├── App.xaml / App.xaml.cs       — 应用入口、单实例检测与自定义缓存路径引导
 ├── MainWindow.cs                — 主小组件、多组件布局/网格引擎、同步调度与托盘菜单
 ├── Widget/

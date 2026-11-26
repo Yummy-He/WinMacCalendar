@@ -95,9 +95,10 @@ internal static partial class Program
             if (Directory.Exists(dstDir)) Directory.Delete(dstDir, true);
         }
 
-        // Run today-first & evening overflow logic checks unconditionally
+        // Run today-first, evening overflow, and afternoon elastic timeline logic checks
         CheckEveningScenario(outDir);
         CheckMiddayTodayFirstScenario(outDir);
+        CheckAfternoonElasticTimelineScenario(outDir);
 
         if (outDir != null)
         {
@@ -233,6 +234,56 @@ internal static partial class Program
         var agTexts = Tree(ag).OfType<TextBlock>().Select(t => t.Text).ToList();
         Check(!agTexts.Contains("晨会同步"), "日程列表不应显示今天已结束日程");
         Check(agTexts.Contains("其他 1 个日程"), "日程列表首屏底部应将放不下的 11月28日 折叠为 其他 1 个日程");
+    }
+
+    private static void CheckAfternoonElasticTimelineScenario(string? outDir)
+    {
+        // Mirrors 15:59 scenario: today has a just-ended 13:30-15:10 event and evening 20:00-21:30 event (span 15..22 = 7h),
+        // tomorrow has 13:30-17:10, day after tomorrow has 08:55-11:40.
+        var day = new DateTime(2026, 11, 26);
+        var nowTime = day.AddHours(15).AddMinutes(59);
+        var work = new CalendarSource("work", "工作", "#000000", false);
+
+        var items = new List<Entry>
+        {
+            new(new Resource("", ""), "技术方案研讨", day.AddHours(13).AddMinutes(30), day.AddHours(15).AddMinutes(10),
+                false, false, TimeSpan.FromMinutes(15), false, "会议室 B202") { Source = work },
+            new(new Resource("", ""), "架构设计分享", day.AddHours(20), day.AddHours(21).AddMinutes(30),
+                false, false, TimeSpan.FromMinutes(15), false, "阶梯教室 C303") { Source = work },
+            new(new Resource("", ""), "性能调优实践与总结", day.AddDays(1).AddHours(13).AddMinutes(30), day.AddDays(1).AddHours(17).AddMinutes(10),
+                false, false, TimeSpan.FromMinutes(15), false, "会议室 D407") { Source = work },
+            new(new Resource("", ""), "周度同步会", day.AddDays(2).AddHours(8).AddMinutes(55), day.AddDays(2).AddHours(11).AddMinutes(40),
+                false, false, TimeSpan.FromMinutes(15), false, "会议室 A102") { Source = work }
+        };
+
+        // 4-day timeline should stretch today to 15..22 (1 column!) and show Fri/Sat/Sun (3 future columns!) anchored on 13..18
+        var wkSize = CalendarCard.Sizes[(int)Variant.Week];
+        var wk = new CalendarCard(Variant.Week, day, nowTime, items, _ => { }, _ => { }, _ => { }, () => { }, dark: false).Root;
+        wk.Measure(wkSize);
+        wk.Arrange(new Rect(wkSize));
+        wk.UpdateLayout();
+        var wkTexts = Tree(wk).OfType<TextBlock>().Select(t => t.Text).ToList();
+        Check(wkTexts.Contains("15 时") && wkTexts.Contains("22 时"), "15:59 四日时间线左列应弹性拉伸至 15 时 – 22 时");
+        Check(wkTexts.Contains("星期五") && wkTexts.Contains("星期六") && wkTexts.Contains("星期日"), "单列装得下今天时，四日时间线右侧应保留未来 3 天");
+        Check(wkTexts.Contains("13 时") && wkTexts.Contains("18 时") && !wkTexts.Contains("8 时"), "右侧时间轴应锚定明天 13 时 – 18 时，不被后天早课截断");
+        Check(wkTexts.Contains("技术方案研讨") && wkTexts.Contains("架构设计分享") && wkTexts.Contains("性能调优实践与总结"), "左列与右列核心日程均应完整显示");
+
+        // 2-day timeline should show Today (15..22) on left + Tomorrow (13..18) on right!
+        var stSize = CalendarCard.Sizes[(int)Variant.ShortTimeline];
+        var st = new CalendarCard(Variant.ShortTimeline, day, nowTime, items, _ => { }, _ => { }, _ => { }, () => { }, dark: false).Root;
+        st.Measure(stSize);
+        st.Arrange(new Rect(stSize));
+        st.UpdateLayout();
+        var stTexts = Tree(st).OfType<TextBlock>().Select(t => t.Text).ToList();
+        Check(stTexts.Contains("明天"), "15:59 双日时间线单列装得下今天时，右列应显示明天");
+        Check(stTexts.Contains("架构设计分享") && stTexts.Contains("性能调优实践与总结"), "双日时间线应同时展示今晚与明天日程");
+
+        if (outDir != null)
+        {
+            Directory.CreateDirectory(outDir);
+            SaveVisual(wk, wkSize, Path.Combine(outDir, "week-1559.png"));
+            SaveVisual(st, stSize, Path.Combine(outDir, "short-1559.png"));
+        }
     }
 
     private static void RenderMonthComparison(string outDir)

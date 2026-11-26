@@ -23,19 +23,33 @@ public sealed partial class CalendarCard
         var today = TimelineDay(now.Date);
         var tomorrow = now.Date.AddDays(1);
         int todayStart = Math.Min(now.Hour, 20);
-        int todaySpan = todayStart <= 18 ? 5 : 4;
-        int todayEnd = Math.Min(todayStart + todaySpan, 24);
+        int maxSingleEnd = Math.Min(todayStart + 7, 24);
+        int minSingleEnd = Math.Min(todayStart + 4, 24);
 
-        // Apple Today-First rule: if today still has timed events extending beyond the first column's window,
-        // the second column seamlessly continues today's later hours instead of jumping to tomorrow.
-        bool extendToday = todayEnd < 24 && today.Any(e =>
-            !e.AllDay && e.Start < tomorrow && e.End > now.Date.AddHours(todayEnd));
-
-        if (extendToday)
+        // Compute the latest ending hour among today's timed events after todayStart.
+        int latestTodayEnd = minSingleEnd;
+        foreach (var ev in today.Where(e => !e.AllDay && e.Start < tomorrow && e.End > now.Date.AddHours(todayStart)))
         {
-            TimelineExtendedToday(wide, today, todayStart, todayEnd);
+            double endHour = Math.Min(24, (ev.End - now.Date).TotalHours);
+            latestTodayEnd = Math.Max(latestTodayEnd, (int)Math.Ceiling(endHour));
+        }
+        latestTodayEnd = Math.Clamp(latestTodayEnd, minSingleEnd, 24);
+
+        // Apple elastic Today rule:
+        // - If all remaining events today fit within a single 4..7h column (e.g. 15:59 -> 15..22 = 7h),
+        //   stretch column 1 to fit them and keep the right side for tomorrow / next 3 days.
+        // - Only split today across 2 columns when the required span exceeds 7h (e.g. 12:05 -> 12..22 = 10h -> 12..17 + 17..22).
+        if (latestTodayEnd > maxSingleEnd)
+        {
+            int totalSpan = latestTodayEnd - todayStart;
+            int col1Span = Math.Clamp((int)Math.Ceiling(totalSpan / 2.0), 4, 7);
+            int col1End = Math.Min(todayStart + col1Span, 24);
+            int col2End = Math.Clamp(latestTodayEnd, Math.Min(col1End + 4, 24), Math.Min(col1End + 7, 24));
+            TimelineExtendedToday(wide, today, todayStart, col1End, col2End);
             return;
         }
+
+        int todayEnd = Math.Clamp(latestTodayEnd, minSingleEnd, maxSingleEnd);
 
         var layout = new Grid();
         layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -52,10 +66,9 @@ public sealed partial class CalendarCard
         body.Children.Add(layout);
     }
 
-    private void TimelineExtendedToday(bool wide, List<Entry> today, int todayStart, int todayEnd)
+    private void TimelineExtendedToday(bool wide, List<Entry> today, int todayStart, int todayEnd, int today2End)
     {
         int today2Start = todayEnd;
-        int today2End = Math.Min(today2Start + 5, 24);
 
         var layout = new Grid();
         if (!wide)
@@ -243,30 +256,49 @@ public sealed partial class CalendarCard
 
     private static (int Start, int End) FutureHours(DateTime[] dates, List<List<Entry>> groups)
     {
-        double earliest = 24, latest = 0;
-        var timed = new List<(double StartHour, double EndHour)>();
+        var perDay = new List<List<(double StartHour, double EndHour)>>();
         for (int i = 0; i < dates.Length; i++)
         {
             var nextDay = dates[i].AddDays(1);
+            var list = new List<(double, double)>();
             foreach (var ev in groups[i].Where(e => !e.AllDay && e.Start < nextDay))
             {
                 double s = Math.Max(0, (ev.Start - ev.Travel - dates[i]).TotalHours);
                 double eHour = Math.Min(24, (ev.End - dates[i]).TotalHours);
-                timed.Add((s, eHour));
-                earliest = Math.Min(earliest, s);
-                latest = Math.Max(latest, eHour);
+                list.Add((s, eHour));
+            }
+            perDay.Add(list);
+        }
+
+        // Anchor on the first future day that has timed events (typically tomorrow) so later days' early
+        // morning events never chop off tomorrow's afternoon schedule.
+        int anchorIdx = perDay.FindIndex(l => l.Count > 0);
+        if (anchorIdx < 0) return (9, 16);
+
+        var anchor = perDay[anchorIdx];
+        int start = Math.Clamp((int)Math.Floor(anchor.Min(t => t.StartHour)), 0, 20);
+        int maxWindowEnd = Math.Min(start + 7, 24);
+        double anchorLatest = anchor
+            .Where(t => t.StartHour < maxWindowEnd)
+            .Select(t => Math.Min(t.EndHour, maxWindowEnd))
+            .DefaultIfEmpty(Math.Min(anchor.Max(t => t.EndHour), maxWindowEnd))
+            .Max();
+        int end = Math.Clamp((int)Math.Ceiling(anchorLatest), Math.Min(start + 4, 24), maxWindowEnd);
+
+        // Expand slightly to also include compatible events on subsequent days if total span stays within 7h.
+        for (int i = anchorIdx + 1; i < perDay.Count; i++)
+        {
+            foreach (var (s, eHour) in perDay[i])
+            {
+                int candStart = Math.Min(start, (int)Math.Floor(s));
+                int candEnd = Math.Max(end, (int)Math.Ceiling(eHour));
+                if (candEnd - candStart <= 7 && candStart >= 0 && candEnd <= 24)
+                {
+                    start = candStart;
+                    end = candEnd;
+                }
             }
         }
-        if (timed.Count == 0) return (9, 16);
-
-        int start = Math.Clamp((int)Math.Floor(earliest), 0, 20);
-        int maxEnd = Math.Min(start + 7, 24);
-        double latestInWindow = timed
-            .Where(t => t.StartHour < maxEnd)
-            .Select(t => Math.Min(t.EndHour, maxEnd))
-            .DefaultIfEmpty(Math.Min(latest, maxEnd))
-            .Max();
-        int end = Math.Clamp((int)Math.Ceiling(latestInWindow), Math.Min(start + 4, 24), maxEnd);
         return (start, end);
     }
 
@@ -407,9 +439,10 @@ public sealed partial class CalendarCard
             {
                 double top = Math.Max(0, (ev.Start - ev.Travel - from).TotalHours) * step + TickOffset;
                 double bottom = Math.Min(end - start, (ev.End - from).TotalHours) * step + TickOffset;
-                double height = Math.Max(4, bottom - top);
+                double rawHeight = bottom - top;
+                double height = ev.End > from && ev.Start < until ? Math.Max(16, rawHeight) : Math.Max(4, rawHeight);
                 double travelHeight = ev.Start >= until ? height :
-                    Math.Clamp((ev.Start - from).TotalHours * step + TickOffset - top, 0, Math.Max(0, bottom - top));
+                    Math.Clamp((ev.Start - from).TotalHours * step + TickOffset - top, 0, Math.Max(0, rawHeight));
                 var block = TimedBlock(ev, Math.Max(1, width - 1), height, travelHeight);
                 Place(canvas, block, gutter + lane * width, top);
             }
