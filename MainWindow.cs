@@ -812,6 +812,11 @@ public sealed class MainWindow : Window
     private void ShowMenu(WidgetInstance cfg, Window target)
     {
         if (modalOpen || isClosing) return;
+        CloseTrayMenuHost();
+        if (ContextMenu is { IsOpen: true } openPrimary) openPrimary.IsOpen = false;
+        foreach (var w in extraWindows.Values)
+            if (w.ContextMenu is { IsOpen: true } openExtra) openExtra.IsOpen = false;
+
         bool night = IsDark;
         var menu = new ContextMenu();
         ThemeResources.Apply(menu, night);
@@ -867,6 +872,18 @@ public sealed class MainWindow : Window
         target.ContextMenu = menu;
         menu.PlacementTarget = target;
         menu.Placement = PlacementMode.MousePoint;
+
+        EventHandler? onDeactivated = null;
+        onDeactivated = (_, _) => { if (menu.IsOpen) menu.IsOpen = false; };
+        target.Deactivated += onDeactivated;
+        menu.Closed += (_, _) =>
+        {
+            target.Deactivated -= onDeactivated;
+            Desktop.Lower(target);
+        };
+
+        target.Activate();
+        Desktop.BringToForeground(target);
         menu.IsOpen = true;
     }
 

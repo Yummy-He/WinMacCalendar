@@ -6,9 +6,9 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <LangVersion>12</LangVersion>
-    <Version>1.0.3</Version>
-    <AssemblyVersion>1.0.3.0</AssemblyVersion>
-    <FileVersion>1.0.3.0</FileVersion>
+    <Version>1.0.4</Version>
+    <AssemblyVersion>1.0.4.0</AssemblyVersion>
+    <FileVersion>1.0.4.0</FileVersion>
     <Product>WinMacCalendar</Product>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources/Calendar.ico</ApplicationIcon>

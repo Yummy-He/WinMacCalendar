@@ -11,7 +11,6 @@ internal static class Desktop
 {
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
-    private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WM_WINDOWPOSCHANGING = 0x0046;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
@@ -70,7 +69,7 @@ internal static class Desktop
     public static void Attach(Window w)
     {
         var hwnd = new WindowInteropHelper(w).Handle;
-        SetStyle(hwnd, GWL_EXSTYLE, GetStyle(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+        SetStyle(hwnd, GWL_EXSTYLE, GetStyle(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW);
         var source = HwndSource.FromHwnd(hwnd);
         source?.AddHook(KeepAtBottomHook);
         Lower(w);
