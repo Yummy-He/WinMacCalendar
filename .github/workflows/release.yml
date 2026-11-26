@@ -1,0 +1,155 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的已有标签名（例如 v1.0.2）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag and version
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.tag }}".Trim()
+            git checkout $tag
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          $ver = $tag -replace '^v', ''
+          if ($ver -notmatch '^\d+\.\d+\.\d+') {
+            $ver = '1.0.0'
+          }
+          $asmVer = ($ver -split '-')[0] + '.0'
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "asm_version=$asmVer" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Tag: $tag | Version: $ver | AssemblyVersion: $asmVer"
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore dependencies
+        shell: pwsh
+        run: dotnet restore WinMacCalendar.csproj
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          dotnet build WinMacCalendar.csproj -c Release --no-restore `
+            -p:Version=${{ steps.meta.outputs.version }} `
+            -p:AssemblyVersion=${{ steps.meta.outputs.asm_version }} `
+            -p:FileVersion=${{ steps.meta.outputs.asm_version }}
+
+      - name: Publish self-contained (win-x64)
+        shell: pwsh
+        run: |
+          $outDir = Join-Path $env:RUNNER_TEMP "artifacts/self-contained"
+          dotnet publish WinMacCalendar.csproj -c Release -r win-x64 --self-contained true `
+            -p:Version=${{ steps.meta.outputs.version }} `
+            -p:AssemblyVersion=${{ steps.meta.outputs.asm_version }} `
+            -p:FileVersion=${{ steps.meta.outputs.asm_version }} `
+            -p:DebugType=none -p:DebugSymbols=false `
+            -o $outDir
+
+      - name: Publish framework-dependent (win-x64)
+        shell: pwsh
+        run: |
+          $outDir = Join-Path $env:RUNNER_TEMP "artifacts/framework-dependent"
+          dotnet publish WinMacCalendar.csproj -c Release -r win-x64 --self-contained false `
+            -p:Version=${{ steps.meta.outputs.version }} `
+            -p:AssemblyVersion=${{ steps.meta.outputs.asm_version }} `
+            -p:FileVersion=${{ steps.meta.outputs.asm_version }} `
+            -p:DebugType=none -p:DebugSymbols=false `
+            -o $outDir
+
+      - name: Package release archives & SHA256 checksums
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $scDir = Join-Path $env:RUNNER_TEMP "artifacts/self-contained"
+          $fdDir = Join-Path $env:RUNNER_TEMP "artifacts/framework-dependent"
+          $distDir = Join-Path $env:RUNNER_TEMP "dist"
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+
+          $scZip = Join-Path $distDir "WinMacCalendar-$tag-win-x64.zip"
+          $fdZip = Join-Path $distDir "WinMacCalendar-$tag-win-x64-lite.zip"
+
+          Compress-Archive -Path (Join-Path $scDir "*") -DestinationPath $scZip -CompressionLevel Optimal
+          Compress-Archive -Path (Join-Path $fdDir "*") -DestinationPath $fdZip -CompressionLevel Optimal
+
+          $hashes = @(
+            $scZip,
+            $fdZip
+          ) | ForEach-Object {
+            $h = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+            $name = Split-Path $_ -Leaf
+            "$h  $name"
+          }
+          $hashes | Out-File -FilePath (Join-Path $distDir "SHA256SUMS.txt") -Encoding utf8
+
+          Get-ChildItem $distDir | Select-Object Name, @{N='MB';E={[math]::Round($_.Length/1MB,2)}} | Format-Table -AutoSize
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $distDir = Join-Path $env:RUNNER_TEMP "dist"
+          $scZip = Join-Path $distDir "WinMacCalendar-$tag-win-x64.zip"
+          $fdZip = Join-Path $distDir "WinMacCalendar-$tag-win-x64-lite.zip"
+          $sums = Join-Path $distDir "SHA256SUMS.txt"
+
+          $notes = @'
+          ## WinMacCalendar __TAG__
+
+          ### 下载说明
+          - **`WinMacCalendar-__TAG__-win-x64.zip`**（推荐，开箱即用）：自包含版本，已内置 .NET 9 运行时与精简 SF Pro / 苹方字体，解压后直接运行 `WinMacCalendar.exe`。
+          - **`WinMacCalendar-__TAG__-win-x64-lite.zip`**（轻量版）：框架依赖版本，体积仅约 5 MB，需系统已安装 [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0)。
+
+          ### 使用提示
+          - 右键小组件或双击系统托盘图标可打开「设置与布局」窗口（支持多小组件、矢量缩放、以 `#1` 为基准的 Apple 网格对齐、主题切换、自定义本地缓存目录及 iCloud 同步配置）。
+          '@
+          $notes = $notes.Replace('__TAG__', $tag)
+
+          $notesFile = Join-Path $distDir "release-notes.md"
+          $notes | Out-File -FilePath $notesFile -Encoding utf8
+
+          $ErrorActionPreference = 'Continue'
+          gh release view $tag --repo "${{ github.repository }}" 2>$null | Out-Null
+          $exists = ($LASTEXITCODE -eq 0)
+          $ErrorActionPreference = 'Stop'
+
+          if ($exists) {
+            Write-Host "Release $tag already exists, uploading updated assets..."
+            gh release upload $tag $scZip $fdZip $sums --repo "${{ github.repository }}" --clobber
+          } else {
+            Write-Host "Creating new release $tag..."
+            gh release create $tag $scZip $fdZip $sums `
+              --repo "${{ github.repository }}" `
+              --title "WinMacCalendar $tag" `
+              --notes-file $notesFile `
+              --generate-notes
+          }

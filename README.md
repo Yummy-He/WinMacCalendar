@@ -142,6 +142,16 @@ dotnet publish WinMacCalendar.csproj -c Release -r win-x64 --self-contained true
 
 运行 `publish/win-x64/WinMacCalendar.exe` 即可启动桌面日历。右键卡片或双击系统托盘图标可打开「设置与布局」窗口。
 
+### 自动编译与发布 Release
+
+仓库已内置 GitHub Actions 流水线（[.github/workflows/release.yml](.github/workflows/release.yml)）：
+
+- **推送标签自动发版**：只需打上 `v*` 标签并推送（如 `git tag -a v1.0.3 -m "v1.0.3" && git push origin v1.0.3`），GitHub 云端将自动编译并在 Releases 页面发布：
+  - `WinMacCalendar-<tag>-win-x64.zip`（自包含版，开箱即用）
+  - `WinMacCalendar-<tag>-win-x64-lite.zip`（轻量框架依赖版，需本机有 .NET 9 Desktop Runtime）
+  - `SHA256SUMS.txt`（校验和）
+- **手动重新触发**：也可在仓库 **Actions → Build & Release → Run workflow** 中输入已有标签名手动触发打包与附件更新。
+
 ### 提交约定
 
 提交信息使用中文，格式为 `类型: 简述`（`feat:` / `fix:` / `refactor:` / `style:` / `docs:`）。
