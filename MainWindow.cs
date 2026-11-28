@@ -30,6 +30,8 @@ public sealed class MainWindow : Window
 
     private readonly List<WidgetInstance> widgets = [];
     private readonly Dictionary<string, WidgetWindow> extraWindows = new();
+    private readonly DispatcherTimer desktopLayerTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private IDisposable? desktopWatch;
     private SettingsWindow? settingsWindow;
     private Window? trayMenuHost;
 
@@ -161,10 +163,17 @@ public sealed class MainWindow : Window
             if (now - lastAttempt >= TimeSpan.FromSeconds(60)) await Sync();
         };
 
+        desktopLayerTimer.Tick += (_, _) =>
+        {
+            if (!isClosing) Desktop.CheckDesktopState(OnShowDesktopChanged);
+        };
+
         Loaded += async (_, _) =>
         {
             SystemEvents.SessionSwitch += OnSessionSwitch;
             NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+            desktopWatch = Desktop.WatchDesktopSwitch(OnShowDesktopChanged);
+            desktopLayerTimer.Start();
             EnsureExtraWindowsShown();
             timer.Start();
             await Sync();
@@ -176,6 +185,9 @@ public sealed class MainWindow : Window
             isClosing = true;
             SystemEvents.SessionSwitch -= OnSessionSwitch;
             NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+            desktopWatch?.Dispose();
+            desktopWatch = null;
+            desktopLayerTimer.Stop();
             timer.Stop();
             closing.Cancel();
             CloseTrayMenuHost();
@@ -403,6 +415,12 @@ public sealed class MainWindow : Window
 
     private Window WindowFor(WidgetInstance w) =>
         w == Primary ? this : extraWindows.TryGetValue(w.Id, out var win) ? win : this;
+
+    private void OnShowDesktopChanged(bool isShowDesktop)
+    {
+        if (isClosing) return;
+        desktopLayerTimer.Interval = TimeSpan.FromMilliseconds(isShowDesktop ? 100 : 250);
+    }
 
     private void LowerAll()
     {

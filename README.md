@@ -112,7 +112,7 @@ WinMacCalendar/
 
 ## 设计与隐私原则
 
-1. **桌面钉住**：桌面小组件使用 `WS_EX_TOOLWINDOW` + `ShowActivated = false` + `WM_WINDOWPOSCHANGING` 维持 `HWND_BOTTOM` 贴底，既不进任务栏/Alt+Tab 且不遮挡其他窗口，又支持与系统桌面右键菜单正常互切焦点；设置窗口与日程弹窗为独立普通前台窗口，不受底层小组件层级牵连。
+1. **桌面钉住**：桌面小组件使用 `WS_EX_TOOLWINDOW` + `ShowActivated = false` + `DWMWA_EXCLUDED_FROM_PEEK`，并动态锚定在系统桌面窗口（`SHELLDLL_DefView` 所属 `Progman`/`WorkerW`）正上方且监听前台/最小化事件：平时严格贴底不遮挡任何软件、不进任务栏/Alt+Tab，点击「显示桌面」（`Win+D`）或速览桌面时仍保持可见，并与系统桌面右键菜单正常互切焦点；设置窗口与日程弹窗为独立普通前台窗口，不受底层小组件层级牵连。
 2. **离线可用**：全量 `.ics` 保存在本地 SQLite 中，断网时完整可用；恢复联网后自动推送本地更改。
 3. **无第三方通信**：仅直连 Apple iCloud CalDAV 服务器，不经过任何中间服务器；个人日历数据库与加密凭证只存放在本机用户目录，不包含在代码仓库内。
 4. **字体策略**：
